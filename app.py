@@ -20,21 +20,50 @@ st.markdown("""
 # --- 2. ניהול Session State ---
 if 'step' not in st.session_state: st.session_state.step = 1
 if 'client' not in st.session_state: st.session_state.client = None
+if 'model_name' not in st.session_state: st.session_state.model_name = "anthropic/claude-3.5-sonnet"
 
-# --- 3. סרגל צד (Sidebar) ---
+# --- 3. סרגל צד (Sidebar) - הגרסה החכמה ---
 with st.sidebar:
     st.image("https://img.icons8.com/color/96/000000/bullish.png", width=60)
     st.header("הגדרות מערכת")
     
-    # API Key Input
-    api_key = st.text_input("OpenRouter API Key", type="password", help="הכנס את המפתח שלך כאן")
-    if api_key:
-        st.session_state.client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key)
-        st.success("המערכת מחוברת ✅")
+    # --- בדיקה האם יש מפתח שמור ב-Secrets ---
+    if "OPENROUTER_API_KEY" in st.secrets:
+        # המערכת מצאה מפתח סודי בשרת
+        secret_key = st.secrets["OPENROUTER_API_KEY"]
+        
+        # חיבור אוטומטי (רק אם עדיין לא מחובר)
+        if not st.session_state.client:
+            try:
+                if secret_key.startswith("sk-or-"):
+                    st.session_state.client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=secret_key)
+                    st.session_state.model_name = "anthropic/claude-3.5-sonnet"
+                else:
+                    st.session_state.client = OpenAI(api_key=secret_key)
+                    st.session_state.model_name = "gpt-4o"
+            except Exception as e:
+                st.error("תקלה בחיבור למפתח השמור")
+        
+        st.success("🔑 מחובר באמצעות רישיון משותף")
+    
+    else:
+        # --- אם אין מפתח שמור, בקש מהמשתמש ---
+        raw_api_key = st.text_input("API Key (OpenAI / OpenRouter)", type="password", help="הכנס מפתח ולחץ Enter")
+        
+        if raw_api_key:
+            api_key = raw_api_key.strip()
+            # זיהוי סוג המפתח
+            if api_key.startswith("sk-or-"):
+                st.session_state.client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key)
+                st.session_state.model_name = "anthropic/claude-3.5-sonnet"
+                st.success("זוהה: OpenRouter ✅")
+            else:
+                st.session_state.client = OpenAI(api_key=api_key)
+                st.session_state.model_name = "gpt-4o"
+                st.success("זוהה: OpenAI ✅")
     
     st.markdown("---")
     if st.button("🏠 התחל ניתוח חדש"):
-        # איפוס משתנים
         keys_to_reset = ['step', 'analysis', 'strategies', 'deep_analysis', 'selected_strat', 'view', 'cap']
         for key in keys_to_reset:
             if key in st.session_state:
@@ -45,6 +74,7 @@ with st.sidebar:
 def clean_json_response(content):
     """מנקה את התשובה של ה-AI כדי לחלץ רק את ה-JSON"""
     try:
+        content = content.strip()
         if "```" in content:
             if "json" in content:
                 return json.loads(content.split("```json")[1].split("```")[0])
@@ -59,7 +89,6 @@ def get_analyst_challenge(view):
     """שלב 1: אתגר את התזה"""
     if not st.session_state.client: return None
     
-    # שים לב: השימוש ב-{{ כפול נועד למנוע את השגיאה שהייתה לך קודם
     prompt = f"""
     You are a Mentor & Risk Manager. User View: "{view}".
     Analyze critically.
@@ -72,7 +101,7 @@ def get_analyst_challenge(view):
     """
     try:
         response = st.session_state.client.chat.completions.create(
-            model="anthropic/claude-3.5-sonnet",
+            model=st.session_state.model_name,
             messages=[{"role": "user", "content": prompt}]
         )
         return clean_json_response(response.choices[0].message.content)
@@ -108,7 +137,7 @@ def get_strategies(view, answers, capital):
     """
     try:
         response = st.session_state.client.chat.completions.create(
-            model="anthropic/claude-3.5-sonnet",
+            model=st.session_state.model_name,
             messages=[{"role": "user", "content": prompt}]
         )
         return clean_json_response(response.choices[0].message.content)
@@ -139,7 +168,7 @@ def get_deep_dive(strategy, view):
     """
     try:
         response = st.session_state.client.chat.completions.create(
-            model="anthropic/claude-3.5-sonnet",
+            model=st.session_state.model_name,
             messages=[{"role": "user", "content": prompt}]
         )
         return clean_json_response(response.choices[0].message.content)
@@ -157,8 +186,9 @@ if st.session_state.step == 1:
     view = st.text_area("מה התזה שלך?", placeholder="לדוגמה: מחירי הנפט יעלו בחורף הקרוב בגלל משבר אנרגיה...", height=120)
     
     if st.button("🚀 התחל ניתוח"):
-        if not api_key:
-            st.error("⚠️ נא להזין API Key בסרגל הצד לפני שמתחילים.")
+        # בדיקה כפולה: או שיש קליינט מחובר (מה-Secrets) או שאין כלום
+        if not st.session_state.client:
+            st.error("⚠️ המערכת לא מחוברת. אם אין לך מפתח ב-Secrets, נא להזין אחד בצד ימין.")
         elif not view:
             st.warning("⚠️ לא כתבת כלום...")
         else:
@@ -214,7 +244,7 @@ elif st.session_state.step == 3:
         with cols[i]:
             with st.container(border=True):
                 st.markdown(f"### {strat.get('name')}")
-                st.markdown(f"**{strat.get('instrument')}**")
+                st.markdown(f"**{strat.get('instrument')}")
                 st.code(strat.get('specific_tickers'))
                 
                 c1, c2 = st.columns(2)
